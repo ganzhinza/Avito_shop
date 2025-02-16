@@ -1,7 +1,7 @@
 INSERT INTO items(name, price)
 VALUES  ('t-shirt', 80),
         ('cup', 20),
-        ('book' 50,),
+        ('book', 50),
         ('pen', 10),
         ('powerbank', 200),
         ('hoody', 300),

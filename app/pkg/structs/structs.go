@@ -11,8 +11,8 @@ type CoinsRecive struct {
 }
 
 type AuthInfo struct {
-	Name     string
-	Password string
+	Name     string `json:"username"`
+	Password string `json:"password"`
 }
 
 type User struct {

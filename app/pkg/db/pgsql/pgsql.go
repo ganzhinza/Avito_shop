@@ -21,7 +21,10 @@ func New(pool *pgxpool.Pool) DB {
 func (db *DB) GetUserWithHistory(name string) (structs.UserWithHistory, error) {
 	var userWithHistory structs.UserWithHistory
 
-	user, err := db.GetUser(name)
+	exists, user, err := db.GetUser(name)
+	if !exists {
+		return structs.UserWithHistory{}, fmt.Errorf("user not exists")
+	}
 	if err != nil {
 		return structs.UserWithHistory{}, err
 	}
@@ -79,7 +82,7 @@ func (db *DB) GetUser(name string) (bool, structs.User, error) {
 		return false, structs.User{}, nil
 	}
 	if err != nil {
-		return false, structs.User{}, err
+		return true, structs.User{}, err
 	}
 
 	return true, user, nil
@@ -157,7 +160,10 @@ func (db *DB) getReciveHistory(reciver string) ([]structs.CoinsRecive, error) {
 }
 
 func (db *DB) checkPurchasePossibility(userName, itemName string) (structs.User, structs.Item, error) {
-	user, err := db.GetUser(userName)
+	exists, user, err := db.GetUser(userName)
+	if !exists {
+		return structs.User{}, structs.Item{}, fmt.Errorf("user not exists")
+	}
 	if err != nil {
 		return structs.User{}, structs.Item{}, err
 	}
@@ -182,7 +188,7 @@ func (db *DB) makePurchase(user structs.User, item structs.Item) error {
 	}
 	user.Balance -= item.Price
 
-	_, err = db.pool.Exec(ctx, "UPDATE TABLE users SET balance = $1, items = $2 WHERE name = $3", user.Balance, JSONItems, user.Name)
+	_, err = db.pool.Exec(ctx, "UPDATE users SET balance = $1, items = $2 WHERE name = $3", user.Balance, JSONItems, user.Name)
 	if err != nil {
 		return err
 	}
@@ -191,11 +197,18 @@ func (db *DB) makePurchase(user structs.User, item structs.Item) error {
 }
 
 func (db *DB) checkTransferPosibility(sender string, transferInfo structs.CoinsSend) error {
-	user, err := db.GetUser(sender)
+	exists, user, err := db.GetUser(sender)
+	if !exists {
+		return fmt.Errorf("sender not exists")
+	}
 	if err != nil {
 		return err
 	}
-	_, err = db.GetUser(transferInfo.ToUser)
+
+	exists, _, err = db.GetUser(transferInfo.ToUser)
+	if !exists {
+		return fmt.Errorf("reciver not exists")
+	}
 	if err != nil {
 		return err
 	}
@@ -215,12 +228,12 @@ func (db *DB) sendCoins(sender string, transferInfo structs.CoinsSend) error {
 	}
 	defer tx.Rollback(ctx)
 
-	_, err = tx.Exec(ctx, "UPDATE TABLE users SET balance = balance + $1 WHERE name = $2", transferInfo.Amount, transferInfo.ToUser)
+	_, err = tx.Exec(ctx, "UPDATE users SET balance = balance + $1 WHERE name = $2", transferInfo.Amount, transferInfo.ToUser)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec(ctx, "UPDATE TABLE users SET balance = balance - $1 WHERE name = $2", transferInfo.Amount, sender)
+	_, err = tx.Exec(ctx, "UPDATE users SET balance = balance - $1 WHERE name = $2", transferInfo.Amount, sender)
 	if err != nil {
 		return err
 	}

@@ -28,47 +28,88 @@ type API struct {
 	jwtKey []byte
 }
 
-func New(db db.Interface) *API {
+func New(db db.Interface, jwtKey []byte) *API {
 	api := API{
 		router: mux.NewRouter(),
 		db:     db,
-		jwtKey: []byte("my-secret-key"), //TODO: get from env
+		jwtKey: jwtKey,
 	}
 
 	api.endpoints()
 	return &api
 }
 
-func (api *API) endpoints() {
-
-	api.router.HandleFunc("/api/auth", api.auth).Methods(http.MethodPost)
-
-	api.router.HandleFunc("/api/info", http.HandlerFunc(api.info)).Methods(http.MethodGet)
-	api.router.HandleFunc("/api/sendCoin", http.HandlerFunc(api.sendCoin)).Methods(http.MethodPost)
-	api.router.HandleFunc("/api/buy/{item}", http.HandlerFunc(api.buyItem)).Methods(http.MethodGet)
-
+func (api *API) createToken(name string) (string, error) {
+	claims := Claims{
+		Username: name,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	fullToken, err := token.SignedString(api.jwtKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	api.verifyToken(fullToken)
+	return token.SignedString(api.jwtKey)
 }
 
 func (api *API) verifyToken(authHeader string) (Claims, error) {
 	if authHeader == "" {
-		return Claims{}, fmt.Errorf("Missing token")
+		return Claims{}, fmt.Errorf("missing token")
 	}
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	claims := &Claims{}
+
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		return api.jwtKey, nil
 	})
 	if err != nil || !token.Valid {
-		return Claims{}, fmt.Errorf("Invalid token")
+		return Claims{}, fmt.Errorf("invalid token %v", err)
 	}
 
-	claims, ok := token.Claims.(Claims)
-	if !ok || claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now()) {
-		return Claims{}, fmt.Errorf("Token has expired")
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now()) {
+		return Claims{}, fmt.Errorf("token has expired")
 	}
 
-	return claims, nil
+	return *claims, nil
+}
+
+func (api *API) auth(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	var authInfo structs.AuthInfo
+	err := decoder.Decode(&authInfo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	exists, storedUser, err := api.db.GetUser(authInfo.Name)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if !exists {
+		storedUser.Name = authInfo.Name
+		storedUser.Password = authInfo.Password
+		storedUser.Balance = DEFAULT_BALANCE
+		err = api.db.AddUser(storedUser)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+	}
+
+	if authInfo.Password != storedUser.Password {
+		log.Fatal(err)
+	}
+
+	tokenString, err := api.createToken(authInfo.Name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	w.Write([]byte("Bearer " + tokenString))
 }
 
 func (api *API) info(w http.ResponseWriter, r *http.Request) {
@@ -135,43 +176,16 @@ func (api *API) buyItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (api *API) auth(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-	var authInfo structs.AuthInfo
-	authInfo.Name = params.Get("name")
-	authInfo.Password = params.Get("password")
-
-	exists, storedUser, err := api.db.GetUser(authInfo.Name)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if !exists {
-		storedUser.Name = authInfo.Name
-		storedUser.Password = authInfo.Password
-		storedUser.Balance = DEFAULT_BALANCE
-		err = api.db.AddUser(storedUser)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-	}
-
-	if authInfo.Password != storedUser.Password {
-		log.Fatal(err)
-	}
-
-	tokenString, err := api.createToken(authInfo.Name)
-	if err != nil {
-		log.Fatal(err)
-	}
-	w.Write([]byte(tokenString))
+func (api *API) Router() *mux.Router {
+	return api.router
 }
 
-func (api *API) createToken(name string) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"name": name,
-		"exp":  time.Now().Add(time.Hour * 24).Unix(),
-	})
-	return token.SignedString(api.jwtKey)
+func (api *API) endpoints() {
+
+	api.router.HandleFunc("/api/auth", api.auth).Methods(http.MethodPost)
+
+	api.router.HandleFunc("/api/info", http.HandlerFunc(api.info)).Methods(http.MethodGet)
+	api.router.HandleFunc("/api/sendCoin", http.HandlerFunc(api.sendCoin)).Methods(http.MethodPost)
+	api.router.HandleFunc("/api/buy/{item}", http.HandlerFunc(api.buyItem)).Methods(http.MethodGet)
+
 }

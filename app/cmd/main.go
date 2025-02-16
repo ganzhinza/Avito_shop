@@ -7,37 +7,47 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type server struct {
+	api *api.API
+}
+
 func main() {
+	dbURL := os.Getenv("DATABASE_URL")
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, "postgres://postgres:rootroot@localhost:5433/films_search")
+	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
 	defer pool.Close()
 
-	err = CreateDatabase(pool)
+	err = PushSchema(pool)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("create error", err)
 		return
 	}
 
 	err = InitializeData(pool)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("init error", err)
 		return
 	}
 
-	var pgdb pgsql.DB
-	pgdb = pgsql.New(pool)
-	api := api.New(&pgdb)
+	srv := new(server)
+
+	pgdb := pgsql.New(pool)
+	srv.api = api.New(&pgdb, []byte("my-secret-key"))
+
+	http.ListenAndServe(":8080", srv.api.Router())
+
 }
 
-func CreateDatabase(db *pgxpool.Pool) error {
+func PushSchema(db *pgxpool.Pool) error {
 	ctx := context.Background()
 
 	fd, err := os.Open("../pkg/db/dbdata/schema.sql")
