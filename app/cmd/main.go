@@ -5,7 +5,6 @@ import (
 	"avito_shop/pkg/db/pgsql"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -50,18 +49,7 @@ func main() {
 func PushSchema(db *pgxpool.Pool) error {
 	ctx := context.Background()
 
-	fd, err := os.Open("../pkg/db/dbdata/schema.sql")
-	if err != nil {
-		return err
-	}
-	defer fd.Close()
-
-	createQuery, err := io.ReadAll(fd)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(ctx, string(createQuery))
+	_, err := db.Exec(ctx, string(createQuery))
 	if err != nil {
 		return err
 	}
@@ -70,17 +58,7 @@ func PushSchema(db *pgxpool.Pool) error {
 
 func InitializeData(db *pgxpool.Pool) error {
 	ctx := context.Background()
-
-	fd, err := os.Open("../pkg/db/dbdata/data.sql")
-	if err != nil {
-		return err
-	}
-	defer fd.Close()
-
-	seedQuery, err := io.ReadAll(fd)
-	if err != nil {
-		return err
-	}
+	var err error
 
 	_, err = db.Exec(ctx, string(seedQuery))
 	if err != nil {
@@ -88,3 +66,44 @@ func InitializeData(db *pgxpool.Pool) error {
 	}
 	return nil
 }
+
+var seedQuery = `INSERT INTO items(name, price)
+VALUES  ('t-shirt', 80),
+        ('cup', 20),
+        ('book', 50),
+        ('pen', 10),
+        ('powerbank', 200),
+        ('hoody', 300),
+        ('umbrella', 200),
+        ('socks', 10),
+        ('wallet', 50),
+        ('pink-hoody', 500);
+`
+
+var createQuery = `
+CREATE TABLE IF NOT EXISTS users(
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(32),
+    password VARCHAR(32),
+    balance DECIMAL(6, 0),
+    items JSONB,
+    CONSTRAINT idx_users_name UNIQUE (name)
+);
+
+CREATE TABLE IF NOT EXISTS items(
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(32),
+    price DECIMAL(5, 0),
+    CONSTRAINT idx_items_name UNIQUE (name)
+);
+
+CREATE TABLE IF NOT EXISTS operations(
+    id SERIAL PRIMARY KEY,
+    sender VARCHAR(32),
+    reciver VARCHAR(32),
+    amount DECIMAL(5, 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sender ON operations USING HASH(sender);
+CREATE INDEX IF NOT EXISTS idx_reciver ON operations USING HASH(reciver);
+`

@@ -5,7 +5,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DATABASE_URL=postgres://password@db:5432/merch_shop
+      - DATABASE_URL=postgres://postgres:password@db:5432/merch_shop?sslmode=disable
     depends_on:
       - db
   
