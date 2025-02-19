@@ -4,7 +4,6 @@ import (
 	"avito_shop/pkg/structs"
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,10 +22,10 @@ func (db *DB) GetUserWithHistory(name string) (structs.UserWithHistory, error) {
 
 	exists, user, err := db.GetUser(name)
 	if !exists {
-		return structs.UserWithHistory{}, fmt.Errorf("user not exists")
+		return structs.UserWithHistory{}, &structs.NotExistsErr{}
 	}
 	if err != nil {
-		return structs.UserWithHistory{}, err
+		return structs.UserWithHistory{}, &structs.DBerror{}
 	}
 
 	userWithHistory.Coins = user.Balance
@@ -34,12 +33,12 @@ func (db *DB) GetUserWithHistory(name string) (structs.UserWithHistory, error) {
 
 	userWithHistory.CoinsHistory.Recived, err = db.getReciveHistory(name)
 	if err != nil {
-		return structs.UserWithHistory{}, err
+		return structs.UserWithHistory{}, &structs.DBerror{}
 	}
 
 	userWithHistory.CoinsHistory.Sent, err = db.getSentHistory(name)
 	if err != nil {
-		return structs.UserWithHistory{}, err
+		return structs.UserWithHistory{}, &structs.DBerror{}
 	}
 
 	return userWithHistory, nil
@@ -79,10 +78,10 @@ func (db *DB) GetUser(name string) (bool, structs.User, error) {
 	var user structs.User
 	err := row.Scan(&user.Name, &user.Password, &user.Balance, &user.Inventory)
 	if err == pgx.ErrNoRows {
-		return false, structs.User{}, nil
+		return false, structs.User{}, &structs.NotExistsErr{}
 	}
 	if err != nil {
-		return true, structs.User{}, err
+		return true, structs.User{}, &structs.DBerror{}
 	}
 
 	return true, user, nil
@@ -91,7 +90,7 @@ func (db *DB) GetUser(name string) (bool, structs.User, error) {
 func (db *DB) AddUser(user structs.User) error {
 	_, err := db.pool.Exec(context.Background(), `INSERT INTO users (name, password, balance) VALUES ($1, $2, $3)`, user.Name, user.Password, user.Balance)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 	return nil
 }
@@ -103,7 +102,11 @@ func (db *DB) GetItem(name string) (structs.Item, error) {
 	var item structs.Item
 	err := row.Scan(&item.Name, &item.Price)
 	if err != nil {
-		return item, err
+		if err == pgx.ErrNoRows {
+			return structs.Item{}, &structs.NotExistsErr{}
+		} else {
+			return structs.Item{}, &structs.DBerror{}
+		}
 	}
 
 	return item, nil
@@ -114,7 +117,7 @@ func (db *DB) getSentHistory(sender string) ([]structs.CoinsSend, error) {
 	coinsSend := make([]structs.CoinsSend, 0)
 	rows, err := db.pool.Query(ctx, `SELECT reciver, SUM(amount) FROM operations WHERE sender = $1 GROUP BY reciver`, sender)
 	if err != nil {
-		return nil, err
+		return nil, &structs.DBerror{}
 	}
 	defer rows.Close()
 
@@ -122,13 +125,13 @@ func (db *DB) getSentHistory(sender string) ([]structs.CoinsSend, error) {
 		var op structs.CoinsSend
 		err := rows.Scan(&op.ToUser, &op.Amount)
 		if err != nil {
-			return nil, nil
+			return nil, &structs.DBerror{}
 		}
 		coinsSend = append(coinsSend, op)
 	}
 	err = rows.Err()
 	if err != nil {
-		return nil, err
+		return nil, &structs.DBerror{}
 	}
 
 	return coinsSend, nil
@@ -139,7 +142,7 @@ func (db *DB) getReciveHistory(reciver string) ([]structs.CoinsRecive, error) {
 	coinsRecived := make([]structs.CoinsRecive, 0)
 	rows, err := db.pool.Query(ctx, `SELECT sender, SUM(amount) FROM operations WHERE reciver = $1 GROUP BY sender`, reciver)
 	if err != nil {
-		return nil, err
+		return nil, &structs.DBerror{}
 	}
 	defer rows.Close()
 
@@ -147,13 +150,13 @@ func (db *DB) getReciveHistory(reciver string) ([]structs.CoinsRecive, error) {
 		var op structs.CoinsRecive
 		err := rows.Scan(&op.FromUser, &op.Amount)
 		if err != nil {
-			return nil, nil
+			return nil, &structs.DBerror{}
 		}
 		coinsRecived = append(coinsRecived, op)
 	}
 	err = rows.Err()
 	if err != nil {
-		return nil, err
+		return nil, &structs.DBerror{}
 	}
 
 	return coinsRecived, nil
@@ -162,18 +165,18 @@ func (db *DB) getReciveHistory(reciver string) ([]structs.CoinsRecive, error) {
 func (db *DB) checkPurchasePossibility(userName, itemName string) (structs.User, structs.Item, error) {
 	exists, user, err := db.GetUser(userName)
 	if !exists {
-		return structs.User{}, structs.Item{}, fmt.Errorf("user not exists")
+		return structs.User{}, structs.Item{}, &structs.NotExistsErr{}
 	}
 	if err != nil {
-		return structs.User{}, structs.Item{}, err
+		return structs.User{}, structs.Item{}, &structs.DBerror{}
 	}
 
 	item, err := db.GetItem(itemName)
 	if err != nil {
-		return structs.User{}, structs.Item{}, err
+		return structs.User{}, structs.Item{}, &structs.DBerror{}
 	}
 	if user.Balance < item.Price {
-		return structs.User{}, structs.Item{}, fmt.Errorf("not enough coins")
+		return structs.User{}, structs.Item{}, &structs.NotEnough{}
 	}
 	return user, item, nil
 }
@@ -184,13 +187,13 @@ func (db *DB) makePurchase(user structs.User, item structs.Item) error {
 	user = user.AppendItem(item.Name)
 	JSONItems, err := json.Marshal(user.Inventory)
 	if err != nil {
-		return err
+		return &structs.JSONerror{}
 	}
 	user.Balance -= item.Price
 
 	_, err = db.pool.Exec(ctx, "UPDATE users SET balance = $1, items = $2 WHERE name = $3", user.Balance, JSONItems, user.Name)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 
 	return nil
@@ -199,22 +202,22 @@ func (db *DB) makePurchase(user structs.User, item structs.Item) error {
 func (db *DB) checkTransferPosibility(sender string, transferInfo structs.CoinsSend) error {
 	exists, user, err := db.GetUser(sender)
 	if !exists {
-		return fmt.Errorf("sender not exists")
+		return &structs.NotExistsErr{}
 	}
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 
 	exists, _, err = db.GetUser(transferInfo.ToUser)
 	if !exists {
-		return fmt.Errorf("reciver not exists")
+		return &structs.NotExistsErr{}
 	}
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 
 	if user.Balance < transferInfo.Amount {
-		return fmt.Errorf("not enough coins")
+		return &structs.NotEnough{}
 	}
 
 	return nil
@@ -224,28 +227,28 @@ func (db *DB) sendCoins(sender string, transferInfo structs.CoinsSend) error {
 	ctx := context.Background()
 	tx, err := db.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx, "UPDATE users SET balance = balance + $1 WHERE name = $2", transferInfo.Amount, transferInfo.ToUser)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 
 	_, err = tx.Exec(ctx, "UPDATE users SET balance = balance - $1 WHERE name = $2", transferInfo.Amount, sender)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 
 	_, err = tx.Exec(ctx, "INSERT INTO operations (sender, reciver, amount) VALUES ($1, $2, $3)", sender, transferInfo.ToUser, transferInfo.Amount)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 
 	err = tx.Commit(ctx)
 	if err != nil {
-		return err
+		return &structs.DBerror{}
 	}
 	return nil
 }

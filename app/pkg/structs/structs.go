@@ -53,3 +53,27 @@ func (u *User) AppendItem(item string) User {
 	u.Inventory = append(u.Inventory, InventoryItem{Type: item, Quantity: 1})
 	return *u
 }
+
+type DBerror struct{}
+
+func (db *DBerror) Error() string {
+	return "db error"
+}
+
+type NotExistsErr struct{}
+
+func (db *NotExistsErr) Error() string {
+	return "not exists"
+}
+
+type JSONerror struct{}
+
+func (db *JSONerror) Error() string {
+	return "JSON error"
+}
+
+type NotEnough struct{}
+
+func (db *NotEnough) Error() string {
+	return "Not enogh coins"
+}

@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -49,10 +48,10 @@ func (api *API) createToken(name string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	fullToken, err := token.SignedString(api.jwtKey)
 	if err != nil {
-		log.Fatal(err)
+		return "", fmt.Errorf("token create: %v", err)
 	}
-	api.verifyToken(fullToken)
-	return token.SignedString(api.jwtKey)
+
+	return fullToken, nil
 }
 
 func (api *API) verifyToken(authHeader string) (Claims, error) {
@@ -83,11 +82,13 @@ func (api *API) auth(w http.ResponseWriter, r *http.Request) {
 	var authInfo structs.AuthInfo
 	err := decoder.Decode(&authInfo)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
 	}
 	exists, storedUser, err := api.db.GetUser(authInfo.Name)
-	if err != nil {
-		log.Fatal(err)
+	if _, ok := err.(*structs.DBerror); ok {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
 	}
 
 	if !exists {
@@ -96,18 +97,21 @@ func (api *API) auth(w http.ResponseWriter, r *http.Request) {
 		storedUser.Balance = DEFAULT_BALANCE
 		err = api.db.AddUser(storedUser)
 		if err != nil {
-			log.Fatal(err)
+			http.Error(w, "Could not add user", http.StatusInternalServerError)
+			return
 		}
 
 	}
 
 	if authInfo.Password != storedUser.Password {
-		log.Fatal(err)
+		http.Error(w, "Wrong password", http.StatusUnauthorized)
+		return
 	}
 
 	tokenString, err := api.createToken(authInfo.Name)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "Could not create token", http.StatusInternalServerError)
+		return
 	}
 	w.Write([]byte("Bearer " + tokenString))
 }
@@ -116,31 +120,32 @@ func (api *API) info(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	claims, err := api.verifyToken(authHeader)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "verification error", http.StatusUnauthorized)
+		return
 	}
 
 	name := claims.Username
 
 	user, err := api.db.GetUserWithHistory(name)
 	if err != nil {
-		log.Fatal(err)
+		strInfo, code := dbOrBadRequest(err)
+		http.Error(w, strInfo, code)
 	}
 
 	userEncoded, err := json.MarshalIndent(user, "", "  ")
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
+		return
 	}
-	_, err = w.Write(userEncoded)
-	if err != nil {
-		log.Fatal(err)
-	}
+	w.Write(userEncoded)
 }
 
 func (api *API) sendCoin(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	claims, err := api.verifyToken(authHeader)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "verification error", http.StatusUnauthorized)
+		return
 	}
 
 	name := claims.Username
@@ -150,12 +155,14 @@ func (api *API) sendCoin(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	err = decoder.Decode(&transferInfo)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
+		return
 	}
 
 	err = api.db.SendCoins(name, transferInfo)
 	if err != nil {
-		log.Fatal(err)
+		strInfo, code := dbOrBadRequest(err)
+		http.Error(w, strInfo, code)
 	}
 }
 
@@ -163,7 +170,8 @@ func (api *API) buyItem(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	claims, err := api.verifyToken(authHeader)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "verification error", http.StatusUnauthorized)
+		return
 	}
 
 	name := claims.Username
@@ -172,7 +180,16 @@ func (api *API) buyItem(w http.ResponseWriter, r *http.Request) {
 	item := vars["item"]
 	err = api.db.BuyItem(name, item)
 	if err != nil {
-		log.Fatal(err)
+		strInfo, code := dbOrBadRequest(err)
+		http.Error(w, strInfo, code)
+	}
+}
+
+func dbOrBadRequest(err error) (string, int) {
+	if _, ok := err.(*structs.DBerror); ok {
+		return "Database error", http.StatusInternalServerError
+	} else {
+		return "Bad request", http.StatusBadRequest
 	}
 }
 
